@@ -127,3 +127,12 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+# project specific definitions
+# pycharm environment exclusion
+.idea
+tmp
+*.csv
+*.cfg
+*.rcp
+*.ipynb
+*.*~
