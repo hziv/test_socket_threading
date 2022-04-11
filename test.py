@@ -7,6 +7,7 @@ Socket and Threading test.
 
 import argparse
 import logging
+from time import sleep
 from msvcrt import kbhit, getch
 
 from socket import socket, AF_INET, SOCK_DGRAM
@@ -38,7 +39,9 @@ DEFAULT_CFG = \
     f"\n" \
     f"default_destination_directory = .\\tmp\n" \
     f"\n" \
-    f"maximum_num_of_iterations = 1000"
+    f"maximum_num_of_iterations = 1000\n" \
+    f"port = 11999\n" \
+    f"buffer_size = 1024"
 
 """
 ================
@@ -64,50 +67,94 @@ def is_number(string_value: str):
 
 
 """
-==================
-MULTI-THREAD CLASS
-==================
+==========
+FLAG CLASS
+==========
 """
 
 
-class MultiThreadClass(Thread):
+class Flag:
+    _flag = False
+
+    def __init__(self, default: bool = False):
+        assert isinstance(default, bool)
+        self.set(default)
+
+    def __del__(self):
+        logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
+
+    def get(self) -> bool:
+        logging.debug(f"Flag.get() returning {self._flag}")
+        return self._flag
+
+    def set(self, new_value: bool = True):
+        assert isinstance(new_value, bool)
+        logging.debug(f"Flag.set({new_value}")
+        self._flag = new_value
+
+
+"""
+=====================================
+MULTI-THREAD FLAG COMMUNICATION CLASS
+=====================================
+"""
+
+
+class MultiThreadFlagCommunicationClass:
     """
     Server Class.
     """
 
-    flag = False
+    start_flag = None
+    stop_flag = None
     condition = None
 
-    def __init__(self, condition: Condition, flag: bool):
+    def __init__(self, condition: Condition, start_flag: Flag, stop_flag: Flag):
         """
         Initialisations
         """
 
-        Thread.__init__(self)
         _ = logging.getLogger(self.__class__.__name__)
 
         assert isinstance(condition, Condition)
         self.condition = condition
-        assert isinstance(flag, bool)
-        self.flag = flag
+        assert isinstance(start_flag, Flag)
+        self.start_flag = start_flag
+        assert isinstance(stop_flag, Flag)
+        self.stop_flag = stop_flag
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
 
     def __del__(self):
         """ Destructor. """
-
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
+
+    def get_start_flag(self) -> bool:
+        self.condition.acquire()
+        flag = self.start_flag.get()
+        self.condition.release()
+        logging.debug(f"get start flag returning {flag}")
+        return flag
+
+    def set_start_flag(self, new_value: bool = True):
+        assert isinstance(new_value, bool)
+        self.condition.acquire()
+        self.start_flag.set(new_value)
+        self.condition.release()
+        logging.debug(f"start flag set to {new_value}")
 
     def get_stop_flag(self) -> bool:
         self.condition.acquire()
-        stop_flag = self.flag
+        flag = self.stop_flag.get()
         self.condition.release()
-        return stop_flag
+        logging.debug(f"get stop flag returning {flag}")
+        return flag
 
     def set_stop_flag(self, new_value: bool = True):
         assert isinstance(new_value, bool)
         self.condition.acquire()
-        self.flag = new_value
+        self.stop_flag.set(new_value)
         self.condition.release()
+        logging.debug(f"stop flag set to {new_value}")
 
 
 """
@@ -117,23 +164,24 @@ CLIENT CLASS
 """
 
 
-class ListeningClientClass(MultiThreadClass):
+class ListeningServerClass(MultiThreadFlagCommunicationClass):
     """
     Client Class.
     """
 
     buffer_size = 1
-    client_socket = None
+    server_socket = None
 
     def __init__(self, condition: Condition,
-                 stop_flag: bool,
+                 start_flag: Flag,
+                 stop_flag: Flag,
                  socket_port: int,
                  buffer_size: int = 1):
         """
         Initialisations
         """
 
-        MultiThreadClass.__init__(self, condition=condition, flag=stop_flag)
+        MultiThreadFlagCommunicationClass.__init__(self, condition, start_flag, stop_flag)
         _ = logging.getLogger(self.__class__.__name__)
 
         assert isinstance(socket_port, int)
@@ -142,8 +190,8 @@ class ListeningClientClass(MultiThreadClass):
         assert buffer_size > 1
         self.buffer_size = buffer_size
 
-        self.client_socket = socket(AF_INET, SOCK_DGRAM)
-        self.client_socket.bind(("localhost", socket_port))
+        self.server_socket = socket(family=AF_INET, type=SOCK_DGRAM)
+        self.server_socket.bind(("localhost", socket_port))
         # self.client_socket.listen(1)  # maximum 1 connection
         logging.debug(f"listening client at port {socket_port} initiated")
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
@@ -153,14 +201,19 @@ class ListeningClientClass(MultiThreadClass):
 
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
-    def run(self):
-        while not self.get_stop_flag():
+    def receiver_loop(self):
+        while not self.stop_flag.get():
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
-                self.set_stop_flag()
-                logging.debug("ESC key pressed, listening client thread stopping")
-            received_values = self.client_socket.recv(self.buffer_size)
+                self.stop_flag.set()
+                logging.debug(f"ESC key pressed, {str(self.__class__.__name__)} thread stopping")
+            received_values, _ = self.server_socket.recvfrom(self.buffer_size)
+            sleep(0.4)
             logging.info(f"packet received: {received_values}")
-        logging.debug("stop flagged - server loop stopped")
+        logging.debug("receiver loop finished")
+
+    def run(self):
+        self.start_flag.set()
+        self.receiver_loop()
 
 
 """
@@ -170,32 +223,36 @@ SERVER CLASS
 """
 
 
-class TransmittingServerClass(MultiThreadClass):
+class TransmittingClientClass(MultiThreadFlagCommunicationClass):
     """
     Server Class.
     """
 
     maximum_num_of_iterations = 1
     server_socket = None
+    client_socket_port = None
 
-    def __init__(self, condition: Condition,
-                 stop_flag: bool,
+    def __init__(self,
+                 condition: Condition,
+                 start_flag: Flag,
+                 stop_flag: Flag,
                  socket_port: int,
                  maximum_num_of_iterations: int = 1000):
         """
         Initialisations
         """
 
-        MultiThreadClass.__init__(self, condition=condition, flag=stop_flag)
+        MultiThreadFlagCommunicationClass.__init__(self, condition, start_flag, stop_flag)
         _ = logging.getLogger(self.__class__.__name__)
 
         assert isinstance(socket_port, int)
         assert socket_port > 1000  # valid range
+        self.client_socket_port = socket_port
         assert isinstance(maximum_num_of_iterations, int)
         assert maximum_num_of_iterations > 1
         self.maximum_num_of_iterations = maximum_num_of_iterations
 
-        self.server_socket = socket(AF_INET, SOCK_DGRAM)
+        self.server_socket = socket(family=AF_INET, type=SOCK_DGRAM)
         # self.server_socket.connect(("localhost", socket_port))
         logging.debug(f"transmitting server at port {socket_port} initiated")
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
@@ -205,15 +262,22 @@ class TransmittingServerClass(MultiThreadClass):
 
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
-    def run(self):
+    def transmitter_loop(self):
         cnt = 0
-        while not self.get_stop_flag():
+        while not self.stop_flag.get():
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
-                self.set_stop_flag()
-                logging.debug("ESC key pressed, transmitting server thread stopping")
-            self.server_socket.send((cnt))
+                self.stop_flag.set()
+                logging.debug(f"ESC key pressed, {str(self.__class__.__name__)} thread stopping")
+            self.server_socket.sendto(str.encode(str(cnt)), ("localhost", self.client_socket_port))
+            sleep(0.5)
             cnt += 1
-        logging.debug("stop flagged - server loop stopped")
+        logging.debug("transmitter loop finished")
+
+    def run(self):
+        while not self.start_flag.get():
+            logging.debug("waiting for start_flag")
+            sleep(0.1)
+        self.transmitter_loop()
 
 
 """
@@ -229,10 +293,13 @@ class MainClass:
     """
 
     maximum_num_of_iterations = 1
+    port = 11999
+    buffer_size = 64
     condition = Condition()
-    flag = False
+    start_flag = Flag(default=False)
+    stop_flag = Flag(default=False)
 
-    def __init__(self, maximum_num_of_iterations: int):
+    def __init__(self, maximum_num_of_iterations: int, port: int, buffer_size: int):
         """
         Initialisations
         """
@@ -244,21 +311,32 @@ class MainClass:
         assert maximum_num_of_iterations > 1
         self.maximum_num_of_iterations = maximum_num_of_iterations
 
+        assert isinstance(port, int)
+        assert port > 1000  # valid range
+        self.port = port
+
+        assert isinstance(buffer_size, int)
+        assert buffer_size > 0
+        self.buffer_size = buffer_size
+
     def __del__(self):
         """ Destructor. """
 
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
     def run(self):
-        port = 11999
-        server = TransmittingServerClass(self.condition, self.flag, port, 1000)
-        server.start()
-        server.join()
-        logging.debug("server started in main")
-        client = ListeningClientClass(self.condition, self.flag, port, 64)
-        client.start()
-        client.join()
-        logging.debug("client started in main")
+        transmitter = Thread(name="Transmitter", target=TransmittingClientClass,
+                             args=(self.condition, self.start_flag, self.stop_flag, self.port, self.maximum_num_of_iterations))
+        listener = Thread(name="Listener", target=ListeningServerClass,
+                          args=(self.condition, self.start_flag, self.stop_flag, self.port, self.buffer_size))
+
+        transmitter.start()
+        listener.start()
+
+        # transmitter.join()
+        listener.join()
+
+        logging.debug("MainClass.run() finished running")
 
 
 """
@@ -274,6 +352,8 @@ class ArgumentsAndConfigProcessing:
     """
 
     maximum_num_of_iterations = 1
+    port = 11999
+    buffer_size = 64
 
     def __init__(self, config_path: str):
         """
@@ -286,6 +366,8 @@ class ArgumentsAndConfigProcessing:
         assert isinstance(config_path, str)
         config = Config(CONFIG_VERSION, config_path, DEFAULT_CFG)
         self.maximum_num_of_iterations = int(config["maximum_num_of_iterations"])
+        self.port = int(config["port"])
+        self.buffer_size = int(config["buffer_size"])
 
     def __del__(self):
         """ Destructor. """
@@ -297,7 +379,7 @@ class ArgumentsAndConfigProcessing:
         """
         Main program.
         """
-        main_class = MainClass(self.maximum_num_of_iterations)
+        main_class = MainClass(self.maximum_num_of_iterations, self.port, self.buffer_size)
         main_class.run()
 
 
@@ -347,6 +429,14 @@ def main():
         raise PermissionError(f'Error opening log file {log_filename}. File might already be opened by another '
                               f'application. Error: {err}\n')
 
+    # ---------------------------------
+    # Debug mode
+    # ---------------------------------
+
+    assert isinstance(args.debug, bool)
+    assert isinstance(args.verbose, bool)
+    assert isinstance(args.quiet, bool)
+
     console = logging.StreamHandler()
     if args.debug:
         console.setLevel(logging.DEBUG)
@@ -361,14 +451,6 @@ def main():
     logging.getLogger('main')
     logging.info(f"Successfully opened log file named: {log_filename}")
     logging.debug(f"Program run with the following arguments: {str(args)}")
-
-    # ---------------------------------
-    # Debug mode
-    # ---------------------------------
-
-    assert isinstance(args.debug, bool)
-    assert isinstance(args.verbose, bool)
-    assert isinstance(args.quiet, bool)
 
     # ---------------------------------
     # Instantiation
