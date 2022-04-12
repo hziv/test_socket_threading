@@ -164,7 +164,7 @@ CLIENT CLASS
 """
 
 
-class ListeningServerClass(MultiThreadFlagCommunicationClass):
+class ListeningServerClass(Thread, MultiThreadFlagCommunicationClass):
     """
     Client Class.
     """
@@ -181,6 +181,7 @@ class ListeningServerClass(MultiThreadFlagCommunicationClass):
         Initialisations
         """
 
+        Thread.__init__(self)
         MultiThreadFlagCommunicationClass.__init__(self, condition, start_flag, stop_flag)
         _ = logging.getLogger(self.__class__.__name__)
 
@@ -223,7 +224,7 @@ SERVER CLASS
 """
 
 
-class TransmittingClientClass(MultiThreadFlagCommunicationClass):
+class TransmittingClientClass(Thread, MultiThreadFlagCommunicationClass):
     """
     Server Class.
     """
@@ -242,6 +243,7 @@ class TransmittingClientClass(MultiThreadFlagCommunicationClass):
         Initialisations
         """
 
+        Thread.__init__(self)
         MultiThreadFlagCommunicationClass.__init__(self, condition, start_flag, stop_flag)
         _ = logging.getLogger(self.__class__.__name__)
 
@@ -325,16 +327,20 @@ class MainClass:
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
     def run(self):
-        transmitter = Thread(name="Transmitter", target=TransmittingClientClass,
-                             args=(self.condition, self.start_flag, self.stop_flag, self.port, self.maximum_num_of_iterations))
-        listener = Thread(name="Listener", target=ListeningServerClass,
-                          args=(self.condition, self.start_flag, self.stop_flag, self.port, self.buffer_size))
+        transmitter = TransmittingClientClass(self.condition, self.start_flag, self.stop_flag,
+                                              self.port, self.maximum_num_of_iterations)
+        # transmitter = Thread(name="Transmitter", target=TransmittingClientClass,
+        #                      args=(self.condition, self.start_flag, self.stop_flag, self.port, self.maximum_num_of_iterations))
+        listener = ListeningServerClass(self.condition, self.start_flag, self.stop_flag,
+                                        self.port, self.buffer_size)
+        # listener = Thread(name="Listener", target=ListeningServerClass,
+        #                   args=(self.condition, self.start_flag, self.stop_flag, self.port, self.buffer_size))
 
         transmitter.start()
         listener.start()
 
-        # transmitter.join()
-        listener.join()
+        transmitter.join(timeout=10)
+        listener.join(timeout=10)
 
         logging.debug("MainClass.run() finished running")
 
