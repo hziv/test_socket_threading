@@ -50,6 +50,9 @@ GLOBAL VARIABLES
 """
 
 
+verbosity = ''
+
+
 """
 =========
 FUNCTIONS
@@ -129,31 +132,27 @@ class MultiThreadFlagCommunicationClass:
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
     def get_start_flag(self) -> bool:
-        self.condition.acquire()
-        flag = self.start_flag.get()
-        self.condition.release()
+        with self.condition:
+            flag = self.start_flag.get()
         logging.debug(f"get start flag returning {flag}")
         return flag
 
     def set_start_flag(self, new_value: bool = True):
         assert isinstance(new_value, bool)
-        self.condition.acquire()
-        self.start_flag.set(new_value)
-        self.condition.release()
+        with self.condition:
+            self.start_flag.set(new_value)
         logging.debug(f"start flag set to {new_value}")
 
     def get_stop_flag(self) -> bool:
-        self.condition.acquire()
-        flag = self.stop_flag.get()
-        self.condition.release()
+        with self.condition:
+            flag = self.start_flag.get()
         logging.debug(f"get stop flag returning {flag}")
         return flag
 
     def set_stop_flag(self, new_value: bool = True):
         assert isinstance(new_value, bool)
-        self.condition.acquire()
-        self.stop_flag.set(new_value)
-        self.condition.release()
+        with self.condition:
+            self.stop_flag.set(new_value)
         logging.debug(f"stop flag set to {new_value}")
 
 
@@ -193,23 +192,30 @@ class ListeningServerClass(Thread, MultiThreadFlagCommunicationClass):
 
         self.server_socket = socket(family=AF_INET, type=SOCK_DGRAM)
         self.server_socket.bind(("localhost", socket_port))
-        # self.client_socket.listen(1)  # maximum 1 connection
         logging.debug(f"listening client at port {socket_port} initiated")
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
 
     def __del__(self):
         """ Destructor. """
-
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
     def receiver_loop(self):
+        global verbosity
+        print("starting to listen")
         while not self.stop_flag.get():
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
                 self.stop_flag.set()
-                logging.debug(f"ESC key pressed, {str(self.__class__.__name__)} thread stopping")
+                msg = f"ESC key pressed, {str(self.__class__.__name__)} thread stopping"
+                if verbosity != "quiet":
+                    print(msg)
+                logging.debug(msg)
             received_values, _ = self.server_socket.recvfrom(self.buffer_size)
             sleep(0.4)
-            logging.info(f"packet received: {received_values}")
+            msg = f"packet received: {received_values}"
+            if not verbosity != "quiet":
+                print(msg)
+            logging.info(msg)
+        print("receiver loop finished")
         logging.debug("receiver loop finished")
 
     def run(self):
@@ -255,24 +261,30 @@ class TransmittingClientClass(Thread, MultiThreadFlagCommunicationClass):
         self.maximum_num_of_iterations = maximum_num_of_iterations
 
         self.server_socket = socket(family=AF_INET, type=SOCK_DGRAM)
-        # self.server_socket.connect(("localhost", socket_port))
         logging.debug(f"transmitting server at port {socket_port} initiated")
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
 
     def __del__(self):
         """ Destructor. """
-
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
     def transmitter_loop(self):
+        global verbosity
         cnt = 0
+        print("starting to transmit")
         while not self.stop_flag.get():
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
                 self.stop_flag.set()
-                logging.debug(f"ESC key pressed, {str(self.__class__.__name__)} thread stopping")
+                msg = f"ESC key pressed, {str(self.__class__.__name__)} thread stopping"
+                if verbosity != "quiet":
+                    print(msg)
+                logging.debug(msg)
             self.server_socket.sendto(str.encode(str(cnt)), ("localhost", self.client_socket_port))
+            if verbosity != "quiet":
+                print(f"sending value {cnt}")
             sleep(0.5)
             cnt += 1
+        print("finished transmitting")
         logging.debug("transmitter loop finished")
 
     def run(self):
@@ -339,8 +351,8 @@ class MainClass:
         transmitter.start()
         listener.start()
 
-        transmitter.join(timeout=10)
-        listener.join(timeout=10)
+        transmitter.join()
+        # listener.join(timeout=10)
 
         logging.debug("MainClass.run() finished running")
 
@@ -399,6 +411,8 @@ COMMAND LINE INTERFACE
 def main():
     """ Argument Parser and Main Class instantiation. """
 
+    global verbosity
+
     # ---------------------------------
     # Parse arguments
     # ---------------------------------
@@ -446,10 +460,13 @@ def main():
     console = logging.StreamHandler()
     if args.debug:
         console.setLevel(logging.DEBUG)
+        verbosity = "debug"
     elif args.verbose:
         console.setLevel(logging.INFO)
+        verbosity = "verbose"
     else:  # default
         console.setLevel(logging.WARNING)
+        verbosity = "quiet"
     formatter = logging.Formatter('%(threadName)-8s, %(name)-15s: %(levelname)-8s %(message)s')
     console.setFormatter(formatter)
     logging.getLogger('').addHandler(console)
