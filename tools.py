@@ -19,13 +19,13 @@ CONSTANTS
 """
 
 
-CONFIG_VERSION = 0.1  # must specify minimal configuration file version here
+_CONFIG_VERSION = 0.1  # must specify minimal configuration file version here
 
-DEFAULT_CFG = \
-    f"# plot.py configuration file.\n" \
+_DEFAULT_CFG = \
+    f"# tools.py configuration file.\n" \
     f"# use # to mark comments.  Note # has to be first character in line.\n" \
     f"\n" \
-    f"config_version = {CONFIG_VERSION}\n" \
+    f"config_version = {_CONFIG_VERSION}\n" \
     f"\n" \
     f"############################\n" \
     f"# important file locations #\n" \
@@ -50,12 +50,12 @@ class Config:
 
     _config = {}
 
-    def __init__(self, config_version: float, path: Union[None, str] = None, default_cfg: str = DEFAULT_CFG):
+    def __init__(self, path: Union[None, str] = None, config_version: float = _CONFIG_VERSION, default_cfg: str = _DEFAULT_CFG):
         """
         Initialisations
-        :param path: Path to config file.  Local directory by default
-        :param config_version: must specify minimum config file version here
-        :param default_cfg: Default CFG
+        @param path: Path to config file.  Local directory by default
+        @param config_version: must specify minimum config file version here
+        @param default_cfg: Default CFG
         """
 
         self.log = logging.getLogger(self.__class__.__name__)
@@ -126,7 +126,7 @@ class Config:
         # verify config_version
         file_version = self.__getitem__("config_version")
         fault_msg = f"Config file {split(path)[1]} version ({file_version}) is lower than " \
-                    f"expected {CONFIG_VERSION}. Consider deleting and re-running code to " \
+                    f"expected {config_version}. Consider deleting and re-running code to " \
                     f"generate default config file " \
                     f"with latest version."
         try:
@@ -135,7 +135,7 @@ class Config:
             logging.error(f"config_version value in file is not a valid float. error: {e}")
         if not isinstance(file_version, (float, int)):
             raise ValueError(fault_msg)
-        if file_version < CONFIG_VERSION:
+        if file_version < config_version:
             raise ValueError(fault_msg)
 
     def __del__(self):
@@ -144,22 +144,22 @@ class Config:
         # destructor content here if required
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
-    def __getitem__(self, item: str) -> Union[str, list]:
+    def __getitem__(self, item: str) -> Union[None, str, list]:
         """
         return parameter from configuration file
-        :param item: name of parameter
+        @param item: name of parameter
         :return: value of parameter from configuration file
         """
         assert isinstance(item, str)
+        ret = None  # by default
         if item in self._config:
             try:
                 ret = self._config[item]
             except KeyError as e:
                 logging.error(f'parameter requested {item} not in config file, error: {e}')
-                return ''
-            if isinstance(ret, str) and ret.lower() == 'none':
                 ret = None
-            return ret
         else:
             logging.info(f'parameter requested {item} not in config file')
-            return ''
+        if ret is not None and isinstance(ret, str) and ret.lower() == 'none':  # turn text none into None
+            ret = None
+        return ret
