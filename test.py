@@ -11,7 +11,7 @@ import logging
 from time import sleep
 from msvcrt import kbhit, getch
 
-from socket import socket, AF_INET, SOCK_DGRAM
+from socket import socket, timeout, error, AF_INET, SOCK_DGRAM
 from threading import Thread, Condition
 
 from tools import Config
@@ -177,7 +177,7 @@ class ListeningServerClass(Thread, MultiThreadStateCommunicationClass):
         Initialisations
         """
 
-        Thread.__init__(self, name="Listener", daemon=True)
+        Thread.__init__(self, name="Listener")
         MultiThreadStateCommunicationClass.__init__(self, condition, state)
         _ = logging.getLogger(self.__class__.__name__)
 
@@ -189,6 +189,7 @@ class ListeningServerClass(Thread, MultiThreadStateCommunicationClass):
 
         self.server_socket = socket(family=AF_INET, type=SOCK_DGRAM)
         self.server_socket.bind(("localhost", socket_port))
+        self.server_socket.settimeout(2)  # two seconds
         logging.debug(f"listening client at port {socket_port} initiated")
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
 
@@ -198,13 +199,22 @@ class ListeningServerClass(Thread, MultiThreadStateCommunicationClass):
 
     def receiver_loop(self):
         global verbosity
+        retry_cnt = 2  # retry twice
         logging.info("starting to listen")
-        while self.state == "running":
+        while self.state == "running" and retry_cnt > 0:
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
                 self.state = "listener_server_stopped"
                 logging.info(f"ESC key pressed, {str(self.__class__.__name__)} thread stopping")
-            received_values, _ = self.server_socket.recvfrom(self.buffer_size)
-            sleep(0.4)
+            try:
+                received_values, _ = self.server_socket.recvfrom(self.buffer_size)
+            except timeout as e:
+                logging.debug(f"socket recvfrom() timed-out ({e}), retrying")
+                retry_cnt -= 1
+                continue
+            except error as e:
+                logging.error(f"socket recvfrom() exception, error: {e}")
+                break
+            sleep(0.4)  # TODO: only for debugging, remember to remove
             msg = f"packet received: {received_values}"
             if not verbosity != "quiet":
                 print(msg)
@@ -224,6 +234,7 @@ class ListeningServerClass(Thread, MultiThreadStateCommunicationClass):
         if self.state != "running":
             self.state = "running"
         self.receiver_loop()
+        logging.debug(f"{str(self.__class__.__name__)}.run() finished")
 
 
 """
@@ -281,7 +292,7 @@ class TransmittingClientClass(Thread, MultiThreadStateCommunicationClass):
             self.server_socket.sendto(str.encode(str(cnt)), ("localhost", self.client_socket_port))
             if verbosity != "quiet":
                 print(f"sending value {cnt}")
-            sleep(0.5)
+            sleep(0.5)  # TODO: only for debugging, remember to remove
             cnt += 1
         logging.info("finished transmitting")
 
@@ -296,6 +307,7 @@ class TransmittingClientClass(Thread, MultiThreadStateCommunicationClass):
         if self.state != "running":
             self.state = "running"
         self.transmitter_loop()
+        logging.debug(f"{str(self.__class__.__name__)}.run() finished")
 
 
 """
@@ -343,7 +355,6 @@ class MainClass:
 
     def __del__(self):
         """ Destructor. """
-
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
     def run(self):
@@ -359,10 +370,10 @@ class MainClass:
         transmitter.start()
         listener.start()
 
-        transmitter.join()
-        # listener.join()
+        transmitter.join(5)
+        listener.join(5)
 
-        logging.debug("MainClass.run() finished running")
+        logging.debug(f"{str(self.__class__.__name__)}.run() finished running")
 
 
 """
