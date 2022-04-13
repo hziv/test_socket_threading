@@ -92,9 +92,6 @@ class State:
         self._approved_values = approved_values
         self._state = self._approved_values[0]
 
-    def __del__(self):
-        logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
-
     @property
     def state(self) -> Union[None, str, int]:
         return self._state
@@ -177,7 +174,7 @@ class ListeningServerClass(Thread, MultiThreadStateCommunicationClass):
         Initialisations
         """
 
-        Thread.__init__(self, name="Listener")
+        Thread.__init__(self, name="Listener", daemon=False)
         MultiThreadStateCommunicationClass.__init__(self, condition, state)
         _ = logging.getLogger(self.__class__.__name__)
 
@@ -262,7 +259,7 @@ class TransmittingClientClass(Thread, MultiThreadStateCommunicationClass):
         Initialisations
         """
 
-        Thread.__init__(self, name="Transmitter")
+        Thread.__init__(self, name="Transmitter", daemon=False)
         MultiThreadStateCommunicationClass.__init__(self, condition, state)
         _ = logging.getLogger(self.__class__.__name__)
 
