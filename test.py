@@ -5,12 +5,13 @@
 Socket and Threading test.
 """
 
+from typing import Union
 import argparse
 import logging
 from time import sleep
 from msvcrt import kbhit, getch
 
-from socket import socket, AF_INET, SOCK_DGRAM
+from socket import socket, timeout, error, AF_INET, SOCK_DGRAM
 from threading import Thread, Condition
 
 from tools import Config
@@ -70,30 +71,36 @@ def is_number(string_value: str):
 
 
 """
-==========
-FLAG CLASS
-==========
+===========
+STATE CLASS
+===========
 """
 
 
-class Flag:
-    _flag = False
+class State:
+    _approved_values = list()
+    _state = None
 
-    def __init__(self, default: bool = False):
-        assert isinstance(default, bool)
-        self.set(default)
+    def __init__(self, approved_values: Union[tuple, list]):
+        """
+        Initialisations
+        @param approved_values: list of approved state machine values, 1st value used as default
+        """
+        _ = logging.getLogger(self.__class__.__name__)
+        assert isinstance(approved_values, (tuple, list))
+        assert len(approved_values) > 0
+        self._approved_values = approved_values
+        self._state = self._approved_values[0]
 
-    def __del__(self):
-        logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
+    @property
+    def state(self) -> Union[None, str, int]:
+        return self._state
 
-    def get(self) -> bool:
-        logging.debug(f"Flag.get() returning {self._flag}")
-        return self._flag
-
-    def set(self, new_value: bool = True):
-        assert isinstance(new_value, bool)
-        logging.debug(f"Flag.set({new_value}")
-        self._flag = new_value
+    @state.setter
+    def state(self, new_value: Union[str, int]):
+        assert isinstance(new_value, (str, int))
+        assert new_value in self._approved_values
+        self._state = new_value
 
 
 """
@@ -103,57 +110,45 @@ MULTI-THREAD FLAG COMMUNICATION CLASS
 """
 
 
-class MultiThreadFlagCommunicationClass:
+class MultiThreadStateCommunicationClass:
     """
     Server Class.
     """
 
-    start_flag = None
-    stop_flag = None
-    condition = None
+    _state = None
+    _condition = None
 
-    def __init__(self, condition: Condition, start_flag: Flag, stop_flag: Flag):
+    def __init__(self, condition: Condition, state: State):
         """
         Initialisations
+        @param condition: pointer to Condition object
+        @param state: pointer to State object
         """
-
         _ = logging.getLogger(self.__class__.__name__)
 
         assert isinstance(condition, Condition)
-        self.condition = condition
-        assert isinstance(start_flag, Flag)
-        self.start_flag = start_flag
-        assert isinstance(stop_flag, Flag)
-        self.stop_flag = stop_flag
+        self._condition = condition
+        assert isinstance(state, State)
+        self._state = state
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
 
     def __del__(self):
         """ Destructor. """
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
-    def get_start_flag(self) -> bool:
-        with self.condition:
-            flag = self.start_flag.get()
-        logging.debug(f"get start flag returning {flag}")
-        return flag
+    @property
+    def state(self):
+        global verbosity
+        with self._condition:
+            ret = self._state.state
+        logging.debug(f"state.get() = {ret}")
+        return ret
 
-    def set_start_flag(self, new_value: bool = True):
-        assert isinstance(new_value, bool)
-        with self.condition:
-            self.start_flag.set(new_value)
-        logging.debug(f"start flag set to {new_value}")
-
-    def get_stop_flag(self) -> bool:
-        with self.condition:
-            flag = self.start_flag.get()
-        logging.debug(f"get stop flag returning {flag}")
-        return flag
-
-    def set_stop_flag(self, new_value: bool = True):
-        assert isinstance(new_value, bool)
-        with self.condition:
-            self.stop_flag.set(new_value)
-        logging.debug(f"stop flag set to {new_value}")
+    @state.setter
+    def state(self, new_value: Union[str, int]):
+        with self._condition:
+            self._state.state = new_value
+        logging.debug(f"state.set({new_value})")
 
 
 """
@@ -163,7 +158,7 @@ CLIENT CLASS
 """
 
 
-class ListeningServerClass(Thread, MultiThreadFlagCommunicationClass):
+class ListeningServerClass(Thread, MultiThreadStateCommunicationClass):
     """
     Client Class.
     """
@@ -172,16 +167,15 @@ class ListeningServerClass(Thread, MultiThreadFlagCommunicationClass):
     server_socket = None
 
     def __init__(self, condition: Condition,
-                 start_flag: Flag,
-                 stop_flag: Flag,
+                 state: State,
                  socket_port: int,
                  buffer_size: int = 1):
         """
         Initialisations
         """
 
-        Thread.__init__(self)
-        MultiThreadFlagCommunicationClass.__init__(self, condition, start_flag, stop_flag)
+        Thread.__init__(self, name="Listener", daemon=False)
+        MultiThreadStateCommunicationClass.__init__(self, condition, state)
         _ = logging.getLogger(self.__class__.__name__)
 
         assert isinstance(socket_port, int)
@@ -192,6 +186,7 @@ class ListeningServerClass(Thread, MultiThreadFlagCommunicationClass):
 
         self.server_socket = socket(family=AF_INET, type=SOCK_DGRAM)
         self.server_socket.bind(("localhost", socket_port))
+        self.server_socket.settimeout(2)  # two seconds
         logging.debug(f"listening client at port {socket_port} initiated")
         logging.debug(f'{str(self.__class__.__name__)} class instantiated.')
 
@@ -201,26 +196,42 @@ class ListeningServerClass(Thread, MultiThreadFlagCommunicationClass):
 
     def receiver_loop(self):
         global verbosity
-        print("starting to listen")
-        while not self.stop_flag.get():
+        retry_cnt = 2  # retry twice
+        logging.info("starting to listen")
+        while self.state == "running" and retry_cnt > 0:
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
-                self.stop_flag.set()
-                msg = f"ESC key pressed, {str(self.__class__.__name__)} thread stopping"
-                if verbosity != "quiet":
-                    print(msg)
-                logging.debug(msg)
-            received_values, _ = self.server_socket.recvfrom(self.buffer_size)
-            sleep(0.4)
+                self.state = "listener_server_stopped"
+                logging.info(f"ESC key pressed, {str(self.__class__.__name__)} thread stopping")
+            try:
+                received_values, _ = self.server_socket.recvfrom(self.buffer_size)
+            except timeout as e:
+                logging.debug(f"socket recvfrom() timed-out ({e}), retrying")
+                retry_cnt -= 1
+                continue
+            except error as e:
+                logging.error(f"socket recvfrom() exception, error: {e}")
+                break
+            sleep(0.4)  # TODO: only for debugging, remember to remove
             msg = f"packet received: {received_values}"
             if not verbosity != "quiet":
                 print(msg)
             logging.info(msg)
-        print("receiver loop finished")
-        logging.debug("receiver loop finished")
+        if self.state != "listener_server_stopped":
+            self.state = "listener_server_stopped"
+        logging.info("receiver loop finished")
 
     def run(self):
-        self.start_flag.set()
+        if self.state == "idle":
+            self.state = "listener_server_ready"
+        while self.state != "transmitter_client_ready":
+            if self.state == "running":
+                break
+            logging.debug("waiting for transmitter_client_ready")
+            sleep(0.5)
+        if self.state != "running":
+            self.state = "running"
         self.receiver_loop()
+        logging.debug(f"{str(self.__class__.__name__)}.run() finished")
 
 
 """
@@ -230,7 +241,7 @@ SERVER CLASS
 """
 
 
-class TransmittingClientClass(Thread, MultiThreadFlagCommunicationClass):
+class TransmittingClientClass(Thread, MultiThreadStateCommunicationClass):
     """
     Server Class.
     """
@@ -241,16 +252,15 @@ class TransmittingClientClass(Thread, MultiThreadFlagCommunicationClass):
 
     def __init__(self,
                  condition: Condition,
-                 start_flag: Flag,
-                 stop_flag: Flag,
+                 state: State,
                  socket_port: int,
                  maximum_num_of_iterations: int = 1000):
         """
         Initialisations
         """
 
-        Thread.__init__(self)
-        MultiThreadFlagCommunicationClass.__init__(self, condition, start_flag, stop_flag)
+        Thread.__init__(self, name="Transmitter", daemon=False)
+        MultiThreadStateCommunicationClass.__init__(self, condition, state)
         _ = logging.getLogger(self.__class__.__name__)
 
         assert isinstance(socket_port, int)
@@ -271,27 +281,31 @@ class TransmittingClientClass(Thread, MultiThreadFlagCommunicationClass):
     def transmitter_loop(self):
         global verbosity
         cnt = 0
-        print("starting to transmit")
-        while not self.stop_flag.get():
+        logging.info("starting to transmit")
+        while self.state != "listener_server_stopped" and self.maximum_num_of_iterations > 0:
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
-                self.stop_flag.set()
-                msg = f"ESC key pressed, {str(self.__class__.__name__)} thread stopping"
-                if verbosity != "quiet":
-                    print(msg)
-                logging.debug(msg)
+                self.state = "transmitter_client_stopped"
+                logging.info(f"ESC key pressed, {str(self.__class__.__name__)} thread flagging listener to stop")
             self.server_socket.sendto(str.encode(str(cnt)), ("localhost", self.client_socket_port))
             if verbosity != "quiet":
                 print(f"sending value {cnt}")
-            sleep(0.5)
+            sleep(0.5)  # TODO: only for debugging, remember to remove
+            self.maximum_num_of_iterations -= 1
             cnt += 1
-        print("finished transmitting")
-        logging.debug("transmitter loop finished")
+        logging.info("finished transmitting")
 
     def run(self):
-        while not self.start_flag.get():
-            logging.debug("waiting for start_flag")
-            sleep(0.1)
+        if self.state == "idle":
+            self.state = "transmitter_client_ready"
+        while self.state != "listener_server_ready":
+            if self.state == "running":
+                break
+            logging.debug("waiting for listener_server_ready")
+            sleep(0.5)
+        if self.state != "running":
+            self.state = "running"
         self.transmitter_loop()
+        logging.debug(f"{str(self.__class__.__name__)}.run() finished")
 
 
 """
@@ -310,8 +324,12 @@ class MainClass:
     port = 11999
     buffer_size = 64
     condition = Condition()
-    start_flag = Flag(default=False)
-    stop_flag = Flag(default=False)
+    state = State(approved_values=["idle",
+                                   "transmitter_client_ready",
+                                   "listener_server_ready",
+                                   "running",
+                                   "transmitter_client_stopped",
+                                   "listener_server_stopped"])
 
     def __init__(self, maximum_num_of_iterations: int, port: int, buffer_size: int):
         """
@@ -335,15 +353,14 @@ class MainClass:
 
     def __del__(self):
         """ Destructor. """
-
         logging.debug(f'{str(self.__class__.__name__)} destructor completed.')
 
     def run(self):
-        transmitter = TransmittingClientClass(self.condition, self.start_flag, self.stop_flag,
+        transmitter = TransmittingClientClass(self.condition, self.state,
                                               self.port, self.maximum_num_of_iterations)
         # transmitter = Thread(name="Transmitter", target=TransmittingClientClass,
         #                      args=(self.condition, self.start_flag, self.stop_flag, self.port, self.maximum_num_of_iterations))
-        listener = ListeningServerClass(self.condition, self.start_flag, self.stop_flag,
+        listener = ListeningServerClass(self.condition, self.state,
                                         self.port, self.buffer_size)
         # listener = Thread(name="Listener", target=ListeningServerClass,
         #                   args=(self.condition, self.start_flag, self.stop_flag, self.port, self.buffer_size))
@@ -351,10 +368,10 @@ class MainClass:
         transmitter.start()
         listener.start()
 
-        transmitter.join()
-        # listener.join(timeout=10)
+        transmitter.join(5)
+        listener.join(5)
 
-        logging.debug("MainClass.run() finished running")
+        logging.debug(f"{str(self.__class__.__name__)}.run() finished running")
 
 
 """
