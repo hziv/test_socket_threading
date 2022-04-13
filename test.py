@@ -285,7 +285,7 @@ class TransmittingClientClass(Thread, MultiThreadStateCommunicationClass):
         global verbosity
         cnt = 0
         logging.info("starting to transmit")
-        while self.state != "listener_server_stopped":
+        while self.state != "listener_server_stopped" and self.maximum_num_of_iterations > 0:
             if kbhit() and getch().decode() == chr(27):  # ESC key pressed
                 self.state = "transmitter_client_stopped"
                 logging.info(f"ESC key pressed, {str(self.__class__.__name__)} thread flagging listener to stop")
@@ -293,6 +293,7 @@ class TransmittingClientClass(Thread, MultiThreadStateCommunicationClass):
             if verbosity != "quiet":
                 print(f"sending value {cnt}")
             sleep(0.5)  # TODO: only for debugging, remember to remove
+            self.maximum_num_of_iterations -= 1
             cnt += 1
         logging.info("finished transmitting")
 
